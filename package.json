@@ -1,0 +1,142 @@
+{
+  "name": "dsh-context-os",
+  "version": "0.1.0",
+  "description": "DSH Context OS: compose agent runs from complete context services through events and context contributions",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.9"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/types/index.d.ts",
+  "bin": {
+    "dsh-context-os": "dist/runtime/cli.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/types/framework.d.ts",
+      "default": "./dist/framework.js"
+    },
+    "./compat": {
+      "types": "./dist/types/compat/index.d.ts",
+      "default": "./dist/compat.js"
+    },
+    "./ui": {
+      "types": "./dist/types/ui/ConnectorComposer.d.ts",
+      "default": "./dist/ui.js"
+    },
+    "./client": "./dist/client.js",
+    "./runtime": "./dist/runtime/register.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "examples",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "README.zh-CN.md",
+    "docs"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.ts",
+    "test:runtime": "node --import ./dist/runtime/register.mjs --test tests/contracts.integration.test.ts tests/framework.integration.test.ts tests/resourceReplacement.integration.test.ts tests/standardCapabilities.integration.test.ts",
+    "test:types": "node scripts/verifyTypes.mjs",
+    "verify": "npm run build && npm test && npm run test:runtime && npm run test:types",
+    "export:source": "node scripts/exportSource.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-connection"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-agent-instructions": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-tool-executor-ptc": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-scope": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-util-values": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-skill": "0.2.1-rc.3",
+    "react": "^18.2.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent-instructions": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tool-executor-ptc": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-scope": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-util-values": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-skill": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "context",
+    "agent",
+    "connector",
+    "plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/weijiafu14/dsh-context-os.git"
+  },
+  "homepage": "https://github.com/weijiafu14/dsh-context-os#readme",
+  "bugs": {
+    "url": "https://github.com/weijiafu14/dsh-context-os/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

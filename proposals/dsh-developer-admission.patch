@@ -1,0 +1,210 @@
+--- a/packages/core/agent/src/runtime-types.ts
++++ b/packages/core/agent/src/runtime-types.ts
+@@ -10,7 +10,7 @@
+ import type {
+   LlmAttemptId, LlmCallConfig, LlmFailure, MessageId, ReasoningEffortId, ResolvedRetryPolicy, StreamChunk,
+ } from '@deepseek-ai/dsh-llm'
+-import type { AgentCancelCause, Session, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
++import type { AgentCancelCause, DeveloperMessage, Session, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
+ export type { AgentCancelCause } from '@deepseek-ai/dsh-session'
+ import type { Agent, InboxTarget, ModelSelection } from './types.ts'
+ export type { Agent } from './types.ts'
+@@ -141,6 +141,9 @@
+   | {
+     kind: 'enter'
+     messages: UserMessage[]
++    /** Staged developer context, admitted with this step after cancellation and request preparation. */
++    developerMessages?: readonly DeveloperMessage[]
++    messageReplacements?: readonly { seq: SessionSeq; message: DeveloperMessage | UserMessage }[]
+     /** Start a distinct model-message series before this step's admitted messages. */
+     startsRequestSeries?: true
+   }
+@@ -336,6 +339,12 @@
+     'agent/inbox/discarded'(this: Scoped<Agent>, payload: { agent: Agent; message: UserMessage }): void
+     // ---- the machine's extension points ----
+     /**
++     * Await scoped context preparation before capability admission and prompt assembly.
++     * Input is read-only; model selection is already captured. Handlers must observe signal.
++     * @mode serial
++     */
++    'agent/prepare-step'(this: Scoped<Agent>, payload: { agent: Agent; messages: readonly UserMessage[]; turn: number; step: number; signal: AbortSignal; modelSelection: Readonly<ModelSelection> }): void | Promise<void>
++    /**
+      * Reject a proposed step or replace the messages that enter it. Calling
+      * `next()` preserves the current messages.
+      * @param payload.agent - the agent proposing the step.
+--- a/packages/core/agent-loop/src/agent.ts
++++ b/packages/core/agent-loop/src/agent.ts
+@@ -30,7 +30,7 @@
+ import { assertNever, deepFreeze } from '@deepseek-ai/dsh-util-values'
+ import type { Scope } from '@deepseek-ai/dsh-scope'
+ import { createScope } from '@deepseek-ai/dsh-scope'
+-import type { EpochHeader, RequestContext, Session, SessionId, SessionSeq, TurnEndReason, UserMessage } from '@deepseek-ai/dsh-session'
++import type { DeveloperMessage, EpochHeader, RequestContext, Session, SessionId, SessionSeq, TurnEndReason, UserMessage } from '@deepseek-ai/dsh-session'
+ import { canonicalHeader, headerEquals, ToolCallRecovery } from '@deepseek-ai/dsh-session'
+ import { joinContextSections, renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+ import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
+@@ -59,6 +59,8 @@
+   | {
+     kind: 'enter'
+     messages: UserMessage[]
++    developerMessages?: readonly DeveloperMessage[]
++    messageReplacements?: readonly { seq: SessionSeq; message: DeveloperMessage | UserMessage }[]
+     startsRequestSeries?: true
+     assembly: PromptAssembly
+     selection: Readonly<ModelSelection>
+@@ -282,6 +284,8 @@
+     if (selection === undefined) {
+       throw new Error(`agent "${this.id}" has no provider/model: set AgentOptions.provider and AgentOptions.model or record a model selection`)
+     }
++    await this.dispatch.serial('agent/prepare-step', { messages: Object.freeze([...claimed]), ...position, signal, modelSelection: selection })
++    signal.throwIfAborted()
+     const toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: selection, signal })
+     try {
+       const assembly = await this.loopCtx.systemPrompt.assemble({ ...assembleContextFor(this, signal), modelSelection: selection, toolSet })
+@@ -290,7 +294,7 @@
+         'agent/pre-step', { messages: claimed, ...position, signal, modelSelection: selection },
+         (): Promise<PreStepDecision> => {
+           const sections = renderContextSections(assembly)
+-          const context = this.runtimeContext.project(joinContextSections(sections), sections)
++          const context = assembly.admission ? undefined : this.runtimeContext.project(joinContextSections(sections), sections)
+           return Promise.resolve<PreStepDecision>({
+             kind: 'enter',
+             messages: context === undefined ? claimed : [...claimed, context],
+@@ -302,7 +306,7 @@
+         toolSet.dispose()
+         return decision
+       }
+-      return { ...decision, assembly, selection, toolSet }
++      return { ...decision, ...(assembly.admission ?? {}), assembly, selection, toolSet }
+     } catch (error: unknown) {
+       toolSet.dispose()
+       throw error
+@@ -439,12 +443,18 @@
+       const currentContext = this.loopCtx.systemPrompt.refreshContext(assembly, {
+         ...assembleContextFor(this, signal), modelSelection: decision.selection,
+       })
++      signal.throwIfAborted()
++      if (firstAttempt) for (const { seq, message } of decision.messageReplacements ?? []) {
++        const intent = { surfaceOp: { op: 'replace' as const, startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] }
++        if (message.role === 'user') this.session.append('user/message', message, intent)
++        else this.session.append('developer/message', { turn, step, message }, intent)
++      }
+       const sections = renderContextSections(currentContext)
+-      const context = this.runtimeContext.project(joinContextSections(sections), sections)
++      const context = assembly.admission ? undefined : this.runtimeContext.project(joinContextSections(sections), sections)
+       signal.throwIfAborted()
+       const startsRequestSeries = firstAttempt && decision.startsRequestSeries === true
+       const commits = this.systemPrompt.project(renderedPrompt, {
+-        inHistory: preparedCall?.systemPromptUpdate === 'in-history',
++        inHistory: !assembly.admission && preparedCall?.systemPromptUpdate === 'in-history',
+         startsSeries: startsRequestSeries
+           || this.requestSurfaceGeneration !== this.session.surface.contentGeneration
+           || (preparedCall?.toolUpdate === undefined && this.toolsChanged(assembly.tools)),
+@@ -454,6 +464,9 @@
+       }
+       let contextAdmitted = false
+       if (firstAttempt) {
++        for (const message of decision.developerMessages ?? []) {
++          this.session.append('developer/message', { turn, step, message }, { surfaceOp: 'append' })
++        }
+         for (const message of decision.messages) {
+           if (message.source.kind === 'runtime-context') {
+             if (context !== undefined && !contextAdmitted) {
+--- a/packages/core/system-prompt/src/index.ts
++++ b/packages/core/system-prompt/src/index.ts
+@@ -123,6 +123,8 @@
+  * declarations are owned by their providers.
+  */
+ export interface PromptPresentation {
++  /** A run compositor may own final message admission and the accepted context snapshot. */
++  admission?: { messages: import('@deepseek-ai/dsh-llm').UserMessage[]; developerMessages: import('@deepseek-ai/dsh-llm').DeveloperMessage[]; messageReplacements: { seq: import('@deepseek-ai/dsh-session').SessionSeq; message: import('@deepseek-ai/dsh-llm').DeveloperMessage | import('@deepseek-ai/dsh-llm').UserMessage }[]; tools: ToolSchema[]; sections: AssembledSection[]; contexts: AssembledContext[] }
+   sections: AssembledSection[]
+   contexts: AssembledContext[]
+   variables: Record<string, string | undefined>
+@@ -585,6 +587,7 @@
+    * @returns the accepted assembly with current runtime-context provider text.
+    */
+   refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptAssembly {
++    if (assembly.admission) return assembly
+     const providers = this.layers.merge(context.scope, layer => layer.contexts)
+     const suppressed = !this.layers.global.runtimeContextSuppressors.isEmpty()
+       || this.layers.chainLayers(context.scope).some(layer => !layer.runtimeContextSuppressors.isEmpty())
+@@ -683,6 +686,7 @@
+       scopeTarget(this, scope), 'system-prompt/assemble', assembly, context,
+       () => Promise.resolve(assembly),
+     )
++    if (transformed.admission) return { ...transformed, tools: transformed.admission.tools, sections: transformed.admission.sections, contexts: transformed.admission.contexts }
+     if (completeSection === undefined && !runtimeContextSuppressed) return { ...transformed, tools }
+     const requiredContexts = new Set([...contextByName.values()].filter(entry => entry.required === true).map(entry => entry.name))
+     return {
+--- a/packages/llm/llm/src/content.ts
++++ b/packages/llm/llm/src/content.ts
+@@ -373,9 +373,17 @@
+   readonly tools: readonly ToolSchema[] | undefined
+ }
+ 
+-function withoutDeveloperMessages(messages: readonly RequestMessage[]): readonly RequestMessage[] {
+-  const retained = messages.filter(message => message.role !== 'developer')
+-  return retained.length === messages.length ? messages : retained
++function withoutToolChangeBlocks(messages: readonly RequestMessage[]): readonly RequestMessage[] {
++  const retained: RequestMessage[] = []
++  for (const message of messages) {
++    if (message.role !== 'developer') {
++      retained.push(message)
++      continue
++    }
++    const content = message.content.filter(block => block.type !== 'tool-addition' && block.type !== 'tool-removal')
++    if (content.length > 0) retained.push(content.length === message.content.length ? message : { ...message, content })
++  }
++  return retained.length === messages.length && retained.every((message, index) => message === messages[index]) ? messages : retained
+ }
+ 
+ function toolDeclarations(
+@@ -413,7 +421,7 @@
+ 
+ /**
+  * Construct provider declarations from session-folded history without changing logged active tools.
+- * Unsupported routes and incomplete history use current declarations without developer updates.
++ * Unsupported routes and incomplete history use current declarations without tool-change blocks; developer instructions remain intact.
+  * Explicitly deferred baseline tools become available only after their first retained addition.
+  * @param messages - complete request inputs, or the prefix selected for an auxiliary call.
+  * @param tools - currently active tool schemas.
+@@ -428,22 +436,22 @@
+   history?: ToolHistory,
+ ): ProjectedToolUpdates {
+   if (toolUpdate === undefined) {
+-    // Unsupported routes need immediately available tools and no update messages.
++    // Unsupported routes need immediately available tools and no tool-change blocks.
+     let immediateTools = tools
+     if (tools?.some(tool => tool.deferLoading === true)) {
+       immediateTools = tools.map(({ deferLoading: _loading, ...tool }) => tool)
+     }
+-    return { messages: withoutDeveloperMessages(messages), tools: immediateTools }
++    return { messages: withoutToolChangeBlocks(messages), tools: immediateTools }
+   }
+ 
+   if (history === undefined) {
+     // Current schemas alone cannot resolve definitions referenced by past updates.
+-    return { messages: withoutDeveloperMessages(messages), tools }
++    return { messages: withoutToolChangeBlocks(messages), tools }
+   }
+   const messageIds = new Set(messages.flatMap(message => message.role === 'developer' ? [message.id] : []))
+   if (history.updates.some(update => !messageIds.has(update.messageId))) {
+     // An auxiliary prefix may omit updates needed to activate historical declarations.
+-    return { messages: withoutDeveloperMessages(messages), tools }
++    return { messages: withoutToolChangeBlocks(messages), tools }
+   }
+ 
+   const declarations = toolDeclarations(tools, toolUpdate, history)
+@@ -457,7 +465,10 @@
+       continue
+     }
+     // Earlier declaration series do not govern the current tool set.
+-    if (!updateIds.has(message.id)) continue
++    if (!updateIds.has(message.id)) {
++      projectedMessages.push(...withoutToolChangeBlocks([message]))
++      continue
++    }
+ 
+     const content = message.content.filter((block) => {
+       switch (block.type) {

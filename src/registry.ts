@@ -1,0 +1,54 @@
+/** Service discovery only. Providers return complete connectors, never feature fragments. */
+import { parseSelection, validateSelection } from './core.ts';
+import type { ConnectorBinding, ConnectorCard, RunSelection } from './core.ts';
+import type { ContextConnector } from './composition.ts';
+
+export interface DiscoveryContext { cwd: string; signal?: AbortSignal; }
+export interface ConnectorProvider {
+  id: string;
+  list(context: DiscoveryContext): Promise<ConnectorCard[]>;
+  /** Construct the service handler; acquire run resources in run/initialize. */
+  connect(binding: ConnectorBinding, context: DiscoveryContext): Promise<ContextConnector>;
+}
+export interface PreparedComposition {
+  selection: RunSelection;
+  cards: ConnectorCard[];
+  connectors: ContextConnector[];
+}
+export class ConnectorRegistry {
+  private providers = new Map<string, ConnectorProvider>();
+  registerProvider(provider: ConnectorProvider): () => void {
+    if (!provider.id || this.providers.has(provider.id)) throw new Error(`Duplicate connector provider: ${provider.id}`);
+    if (typeof provider.connect !== 'function') throw new Error('A provider must construct complete connectors');
+    this.providers.set(provider.id, provider);
+    return () => { if (this.providers.get(provider.id) === provider) this.providers.delete(provider.id); };
+  }
+  private async discover(context: DiscoveryContext) {
+    const owners = new Map<string, ConnectorProvider>(); const cards: ConnectorCard[] = [];
+    for (const provider of this.providers.values()) {
+      context.signal?.throwIfAborted();
+      for (const card of await provider.list(context)) {
+        if (owners.has(card.id)) throw new Error(`Duplicate connector identity: ${card.id}`);
+        owners.set(card.id, provider);
+        cards.push({ id: card.id, kind: card.kind, label: card.label, description: card.description,
+          ...(card.fields ? { fields: card.fields } : {}), ...(card.disabledReason ? { disabledReason: card.disabledReason } : {}) });
+      }
+    }
+    return { cards, owners };
+  }
+  async catalog(context: DiscoveryContext): Promise<ConnectorCard[]> { return (await this.discover(context)).cards; }
+  async prepare(input: unknown, context: DiscoveryContext): Promise<PreparedComposition> {
+    const selection = parseSelection(input); const { cards, owners } = await this.discover(context);
+    validateSelection(selection, cards);
+    const connectors: ContextConnector[] = [];
+    for (const binding of selection.bindings) {
+      context.signal?.throwIfAborted();
+      const provider = owners.get(binding.id)!;
+      if (this.providers.get(provider.id) !== provider) throw new Error('Connector provider changed during preparation');
+      const connector = await provider.connect(binding, context);
+      if (connector.id !== binding.id) throw new Error('Connected instance must retain its selected identity');
+      connectors.push(connector);
+    }
+    return { selection, cards: selection.bindings.map(binding => cards.find(card => card.id === binding.id)!), connectors };
+  }
+}

@@ -1,0 +1,3 @@
+- insert:
+    - id: context-connectors
+      name: dsh-context-os

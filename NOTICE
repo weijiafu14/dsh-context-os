@@ -1,0 +1,15 @@
+DSH Context OS
+
+The runtime bridge contains modified portions of DeepSeek Harness:
+https://github.com/deepseek-ai/deepseek-harness
+Revision: 22ddee3792402c3e70ec5f86a63c3e3e895a2f60
+Copyright (c) 2026 DeepSeek
+License: MIT (retained in dist/runtime/LICENSE.dsh)
+
+Modifications add context preparation, authoritative admission, and durable
+message replacement, and preserve ordinary developer content during tool-update
+projection. The source proposal is in proposals/dsh-developer-admission.patch.
+
+DSH Context OS is an independent community plugin and is not an official
+DeepSeek product. Host applications provide their own authentication and
+resource services; they are not included in this distribution.
