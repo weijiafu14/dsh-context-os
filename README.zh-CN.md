@@ -11,7 +11,7 @@ DSH Context OS 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-ha
 
 [ReAct](https://react-lm.github.io/) 将推理与行动结合。这里的 slogan 表达的是一种架构主张：保持通用的运行循环，让它与外界的连接可以自由组合。
 
-**当前状态：**实验版 `0.1.0`。上下文组合运行和 Web 拖拽界面已经可用，完整模式通过随包启动器配合固定版本的 DSH 运行。统一资源审计、通过 Agent 对话辅助配置等能力属于下一步，详见[当前能力](#当前能力)。
+**当前状态：**实验版 `0.2.0`。上下文组合运行和 Web 拖拽界面已经可用，完整模式通过随包启动器配合固定版本的 DSH 运行。统一资源审计、通过 Agent 对话辅助配置等能力属于下一步，详见[当前能力](#当前能力)。
 
 ## 从一轮运行出发
 
@@ -185,12 +185,12 @@ Skill、MCP 适配用于承接已有集成，新服务可以直接实现连接�
 
 ## 安装与运行
 
-需要 **Node.js 24.9+**，以及已经构建好的 DSH [`22ddee3792402c3e70ec5f86a63c3e3e895a2f60`](https://github.com/deepseek-ai/deepseek-harness/tree/22ddee3792402c3e70ec5f86a63c3e3e895a2f60) 版本，版本标签为 `0.2.1-rc.3`。只匹配 npm 版本号不够。首个版本为 `dsh-context-os@0.1.0`。
+需要 **Node.js 24.9+**，以及已经构建好的 DSH [`22ddee3792402c3e70ec5f86a63c3e3e895a2f60`](https://github.com/deepseek-ai/deepseek-harness/tree/22ddee3792402c3e70ec5f86a63c3e3e895a2f60) 版本，版本标签为 `0.2.1-rc.3`。只匹配 npm 版本号不够。首个版本为 `dsh-context-os@0.2.0`。
 
 从 npm 安装到兼容的 DSH Web profile：
 
 ```sh
-dsh plugin --profile web add dsh-context-os@0.1.0 --ignore-scripts --config.auto-install-peers=false -w
+dsh plugin --profile web add dsh-context-os@0.2.0 --ignore-scripts --config.auto-install-peers=false -w
 "${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/.bin/dsh-context-os" --dsh-root /absolute/path/to/pinned/deepseek-harness --profile web
 ```
 
@@ -204,7 +204,7 @@ npm pack
 将生成的包安装到兼容的 DSH Web profile：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-context-os-0.1.0.tgz --ignore-scripts --config.auto-install-peers=false -w
+dsh plugin --profile web add /absolute/path/dsh-context-os-0.2.0.tgz --ignore-scripts --config.auto-install-peers=false -w
 "${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/.bin/dsh-context-os" --dsh-root /absolute/path/to/pinned/deepseek-harness --profile web
 ```
 
@@ -231,3 +231,10 @@ npm run export:source
 - [未来 AI 研发体系：架构篇](https://github.com/weijiafu14/dsh/blob/main/articles/01-architecture.md)
 
 采用 [MIT](LICENSE)。DSH 派生适配保留上游许可及修改说明，见 [NOTICE](NOTICE) 和 `dist/runtime/LICENSE.dsh`。DSH Context OS 是独立的社区项目。
+
+
+参考应用：[DSH COS Super-agent](https://github.com/weijiafu14/dsh-cos-super-agent)，通过完整资源服务组合出任务执行、子任务和原生 Web 管理界面。
+
+## 0.2 的运行管理
+
+宿主可以向连接器授予受限的 `catalog`、`start`、`send`、`wait`、`stop` 能力。子运行归父运行管理，空闲启动、输入投递、取消与清理继续使用同一套组合机制。详见[运行控制契约](docs/run-control.md)和 [Super-agent 实现](https://github.com/weijiafu14/dsh-cos-super-agent)。

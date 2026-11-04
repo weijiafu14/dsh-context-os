@@ -20,12 +20,15 @@ import type { SkillRegistration } from '@deepseek-ai/dsh-skill';
 import { createComposedRun, isComposedAgent } from './composedRun.ts';
 import { standardSelection } from './compat/standardSelection.ts';
 import { PtcExecutor } from '@deepseek-ai/dsh-tool-executor-ptc';
+import { RunManager } from './runs.ts';
 
 export { ConnectorRegistry };
 export type * from './registry.ts';
 export type * from './core.ts';
 export { createComposedRun, capabilityName } from './composedRun.ts';
 export type { ComposedRunOptions, SendReceipt } from './composedRun.ts';
+export { RunManager } from './runs.ts';
+export type { RunControl, RunRequest, RunAuthority } from './runs.ts';
 export type { ContextConnector, ConnectorEvent, Contribution, CurrentContribution, RuntimeEventData, ConnectorRequest } from './composition.ts';
 export const name = 'context-connectors';
 export const inject = ['agents', 'sessions', 'tools', 'systemPrompt', 'skills'];
@@ -33,7 +36,7 @@ export interface Config { cwd?: string; selection?: RunSelection; sessionId?: st
 export const Config = Schema.object({ cwd: Schema.string().default(''), selection: Schema.any(), sessionId: Schema.string(), virtualSkills: Schema.array(Schema.any()).default([]), historyContext: Schema.string() });
 
 declare module '@deepseek-ai/cordis' {
-  interface Context { contextConnectors: ConnectorRegistry; }
+  interface Context { contextConnectors: ConnectorRegistry; contextOS: RunManager; }
 }
 export function registerConnector(ctx: Context, provider: ConnectorProvider): void {
   ctx.effect(() => ctx.contextConnectors.registerProvider(provider), `context-connector:${provider.id}`);
@@ -43,6 +46,9 @@ export function registerConnector(ctx: Context, provider: ConnectorProvider): vo
 export function apply(ctx: Context, config: Config = {}): void {
   const registry = new ConnectorRegistry();
   ctx.provide('contextConnectors', registry);
+  const runs = new RunManager(ctx, registry);
+  ctx.provide('contextOS', runs);
+  ctx.effect(() => () => runs.dispose());
   registerConnector(ctx, adaptLegacyProvider(ctx, nativeConnectorProvider(ctx)));
   registerConnector(ctx, adaptLegacyProvider(ctx, inlineConnectorProvider));
   for (const skill of config.virtualSkills ?? []) ctx.skills.register(skill);

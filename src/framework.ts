@@ -5,5 +5,7 @@ export { ConnectorRegistry } from './registry.ts';
 export type { ConnectorProvider, DiscoveryContext, PreparedComposition } from './registry.ts';
 export { createComposedRun, capabilityName } from './composedRun.ts';
 export type { ComposedRunOptions, SendReceipt } from './composedRun.ts';
+export { RunManager } from './runs.ts';
+export type { RunControl, RunRequest, RunReference, RunAuthority, RunCaller, SourceEvent } from './runs.ts';
 export { parseSelection, validateSelection, moveBinding } from './core.ts';
 export type * from './core.ts';

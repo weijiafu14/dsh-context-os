@@ -11,7 +11,7 @@ DSH Context OS is a plugin for [DeepSeek Harness](https://github.com/deepseek-ai
 
 [ReAct](https://react-lm.github.io/) combines reasoning and acting. Our slogan expresses an architectural thesis: keep that loop general, and make its connection to the world composable.
 
-**Status:** experimental `0.1.0`. The composition runtime and drag-and-drop Web UI work today. The complete mode uses the included launcher with a pinned DSH build. Service-wide resource auditing and agent-assisted configuration are next steps. See [current scope](#current-scope).
+**Status:** experimental `0.2.0`. The composition runtime and drag-and-drop Web UI work today. The complete mode uses the included launcher with a pinned DSH build. Service-wide resource auditing and agent-assisted configuration are next steps. See [current scope](#current-scope).
 
 ## Start with the run
 
@@ -185,12 +185,12 @@ Skill and MCP adapters preserve existing integrations. New services can use the 
 
 ## Install and run
 
-Requirements: **Node.js 24.9+** and a prebuilt DSH checkout at [`22ddee3792402c3e70ec5f86a63c3e3e895a2f60`](https://github.com/deepseek-ai/deepseek-harness/tree/22ddee3792402c3e70ec5f86a63c3e3e895a2f60), carrying version label `0.2.1-rc.3`. A matching npm version label alone is insufficient. The initial release is `dsh-context-os@0.1.0`.
+Requirements: **Node.js 24.9+** and a prebuilt DSH checkout at [`22ddee3792402c3e70ec5f86a63c3e3e895a2f60`](https://github.com/deepseek-ai/deepseek-harness/tree/22ddee3792402c3e70ec5f86a63c3e3e895a2f60), carrying version label `0.2.1-rc.3`. A matching npm version label alone is insufficient. This release is `dsh-context-os@0.2.0`.
 
 Install from npm into the compatible DSH Web profile:
 
 ```sh
-dsh plugin --profile web add dsh-context-os@0.1.0 --ignore-scripts --config.auto-install-peers=false -w
+dsh plugin --profile web add dsh-context-os@0.2.0 --ignore-scripts --config.auto-install-peers=false -w
 "${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/.bin/dsh-context-os" --dsh-root /absolute/path/to/pinned/deepseek-harness --profile web
 ```
 
@@ -204,7 +204,7 @@ npm pack
 Install the resulting package into the compatible DSH Web profile:
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-context-os-0.1.0.tgz --ignore-scripts --config.auto-install-peers=false -w
+dsh plugin --profile web add /absolute/path/dsh-context-os-0.2.0.tgz --ignore-scripts --config.auto-install-peers=false -w
 "${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/.bin/dsh-context-os" --dsh-root /absolute/path/to/pinned/deepseek-harness --profile web
 ```
 
@@ -231,3 +231,10 @@ Installed-package browser validation covers DSH Web drag-and-drop, custom provid
 - [Architecture for AI-driven development](https://github.com/weijiafu14/dsh/blob/main/articles/01-architecture.md)
 
 [MIT](LICENSE). The DSH-derived bridge retains its upstream license and modification notices; see [NOTICE](NOTICE) and `dist/runtime/LICENSE.dsh`. DSH Context OS is an independent community project.
+
+
+Reference application: [DSH COS Super-agent](https://github.com/weijiafu14/dsh-cos-super-agent) exercises scoped run control, complete resource services and the native Web UI.
+
+## Managed runs in 0.2
+
+The host can grant a connector scoped `catalog`, `start`, `send`, `wait` and `stop` operations. Parent-owned child runs, idle starts, queued input, cancellation and cleanup use the same composition mechanism. See the [run-control contract](docs/run-control.md) and the [Super-agent implementation](https://github.com/weijiafu14/dsh-cos-super-agent).

@@ -155,6 +155,11 @@ export async function createComposedRun(ctx: Context, options: ComposedRunOption
               name: value.name || capabilityName(item.owner, item.key), description: value.description, parameters: value.parameters,
               output: native ? { ...native.output, schema: value.output } : { schema: value.output, render: (_args, result) => [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result) }] },
               async execute(args, execution) {
+                // Observers must receive the admitted inputs before a service
+                // acts on them or reports that their work is complete.
+                await records;
+                if (saveErrors.length) throw new AggregateError([...saveErrors], 'Connector record observers failed');
+                execution.signal.throwIfAborted();
                 const violations = native ? [] : validateJsonSchemaValue(value.parameters as JsonSchemaNode, args);
                 if (violations.length) throw new Error(violations.join('; '));
                 const requestId = randomUUID();
@@ -253,13 +258,24 @@ export async function createComposedRun(ctx: Context, options: ComposedRunOption
             return { ...decision, messages, developerMessages, messageReplacements };
           });
 
-          inner.on('session/event', (session, event) => {
-            if (session !== agent.session) return;
+          const observed = new Set<number>();
+          const observeRecord = (event: SessionEvent) => {
+            if (observed.has(event.seq)) return;
+            observed.add(event.seq);
             if (event.type === 'user/message') acceptedInputs.delete(event.data.id);
             const snapshot = structuredClone(event);
             records = records.then(async () => {
               await composition.dispatch('session/event', { record: snapshot }, lifetime.signal);
             }).catch(error => { saveErrors.push(error); });
+          };
+          // Native creation can add records (notably session/end-seed) before
+          // setup installs listeners. They belong to this run's observations
+          // too; otherwise a history provider sees a hole after every replay.
+          if (!options.agent) for (const event of agent.session.snapshotEvents()) {
+            if (event.seq >= replay.length) observeRecord(event);
+          }
+          inner.on('session/event', (session, event) => {
+            if (session === agent.session) observeRecord(event);
           });
           const finalizeIfIdle = () => {
             if (agent.status !== 'idle' || children.size || maintaining) return;
@@ -341,8 +357,13 @@ export async function createComposedRun(ctx: Context, options: ComposedRunOption
         await composition.dispatch(type, data, AbortSignal.any([delivery.signal, lifetime.signal]), owner);
         const messages = composition.takeMessages();
         for (const message of messages) acceptedInputs.set(message.id, message);
-        if (agent.status === 'idle' && messages.length) agent.followup(messages.shift()!);
+        // DSH claims next-step messages before the waking next-turn message.
+        // Queue the complete batch before waking so its first model call sees
+        // every contribution, in order, even when followup starts synchronously.
+        const idle = agent.status === 'idle';
+        const waking = messages.pop();
         for (const message of messages) agent.inject(message);
+        if (waking) { if (idle) agent.followup(waking); else agent.steer(waking); }
         return Object.freeze({ completed: agent.status !== 'idle' || completion ? waitForCompletion() : Promise.resolve(undefined) });
       }).finally(() => { sourceDeliveries.delete(delivery); });
       sourceQueue = operation.catch(() => {});
