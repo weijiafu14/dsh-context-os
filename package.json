@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-os",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH Context OS: compose agent runs from complete context services through events and context contributions",
   "license": "MIT",
   "engines": {
@@ -47,7 +47,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.ts",
-    "test:runtime": "node --import ./dist/runtime/register.mjs --test tests/contracts.integration.test.ts tests/framework.integration.test.ts tests/resourceReplacement.integration.test.ts tests/standardCapabilities.integration.test.ts",
+    "test:runtime": "node --import ./dist/runtime/register.mjs --test tests/contracts.integration.test.ts tests/framework.integration.test.ts tests/resourceReplacement.integration.test.ts tests/standardCapabilities.integration.test.ts tests/runs.integration.test.ts",
     "test:types": "node scripts/verifyTypes.mjs",
     "verify": "npm run build && npm test && npm run test:runtime && npm run test:types",
     "export:source": "node scripts/exportSource.mjs"

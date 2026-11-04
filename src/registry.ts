@@ -2,8 +2,17 @@
 import { parseSelection, validateSelection } from './core.ts';
 import type { ConnectorBinding, ConnectorCard, RunSelection } from './core.ts';
 import type { ContextConnector } from './composition.ts';
+import type { RunControl } from './runs.ts';
 
-export interface DiscoveryContext { cwd: string; signal?: AbortSignal; }
+export interface DiscoveryContext {
+  cwd: string;
+  signal?: AbortSignal;
+  /** Host-assigned identity. Providers still enforce their resource-specific authorization. */
+  subject?: string;
+  runId?: string;
+  /** A host-issued control interface scoped to this connector instance. */
+  os?: RunControl;
+}
 export interface ConnectorProvider {
   id: string;
   list(context: DiscoveryContext): Promise<ConnectorCard[]>;
@@ -37,7 +46,8 @@ export class ConnectorRegistry {
     return { cards, owners };
   }
   async catalog(context: DiscoveryContext): Promise<ConnectorCard[]> { return (await this.discover(context)).cards; }
-  async prepare(input: unknown, context: DiscoveryContext): Promise<PreparedComposition> {
+  async prepare(input: unknown, context: DiscoveryContext,
+    contextFor?: (binding: ConnectorBinding) => DiscoveryContext): Promise<PreparedComposition> {
     const selection = parseSelection(input); const { cards, owners } = await this.discover(context);
     validateSelection(selection, cards);
     const connectors: ContextConnector[] = [];
@@ -45,7 +55,7 @@ export class ConnectorRegistry {
       context.signal?.throwIfAborted();
       const provider = owners.get(binding.id)!;
       if (this.providers.get(provider.id) !== provider) throw new Error('Connector provider changed during preparation');
-      const connector = await provider.connect(binding, context);
+      const connector = await provider.connect(binding, contextFor?.(binding) ?? context);
       if (connector.id !== binding.id) throw new Error('Connected instance must retain its selected identity');
       connectors.push(connector);
     }
