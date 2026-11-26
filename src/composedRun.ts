@@ -4,7 +4,7 @@ import { agentEvents } from '@deepseek-ai/dsh-agent';
 import type { Agent, AgentHandle, AgentOptions, ModelSelection } from '@deepseek-ai/dsh-agent';
 import { createDeveloperMessage, createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { ContentBlock, UserMessage, DeveloperMessage, ToolSchema } from '@deepseek-ai/dsh-llm';
-import { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session';
+import { SessionId, SessionLogOffset, appendPluginRecord } from '@deepseek-ai/dsh-session';
 import type { SessionEvent, SessionSeq, TurnEndReason } from '@deepseek-ai/dsh-session';
 import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import type { ToolDefinition, ToolExecutor, JsonSchemaNode } from '@deepseek-ai/dsh-tools';
@@ -14,8 +14,15 @@ import type {} from '@deepseek-ai/dsh-system-prompt';
 import type {} from '@deepseek-ai/dsh-subagent';
 import { Composition, capabilityName } from './composition.ts';
 import type { ContextConnector, OwnedCurrent } from './composition.ts';
+import type { CacheRefreshReason, CacheRefreshRecord } from './core.ts';
 import { nativeActivation, nativeDefinition, withNativeInvocation } from './nativeBindings.ts';
 import { deepFreeze } from '@deepseek-ai/dsh-util-values';
+
+declare module '@deepseek-ai/dsh-session/types' {
+  interface PluginRecordMap {
+    'plugin:context-connectors/cache-refresh': CacheRefreshRecord;
+  }
+}
 
 /** Internal native admission uses the existing durable surface replacement mechanism. */
 interface ContextAdmission {
@@ -32,7 +39,13 @@ export interface SendReceipt {
 }
 
 declare module '@deepseek-ai/dsh-llm' {
-  interface MessageSourceMap { 'context-composition': { kind: 'context-composition'; slot?: 'background' }; }
+  interface MessageSourceMap {
+    'context-composition': {
+      kind: 'context-composition';
+      slot?: 'background' | 'ambient';
+      form?: 'snapshot' | 'instructions';
+    };
+  }
 }
 declare module '@deepseek-ai/dsh-system-prompt' {
   interface AssembleContext { contextCompositionProbe?: boolean; }
@@ -58,7 +71,10 @@ export interface ComposedRunOptions {
 }
 
 const composedAgents = new WeakSet<Agent>();
+const agentCacheRefreshes = new WeakMap<Agent, CacheRefreshRecord[]>();
 export const isComposedAgent = (agent: Agent): boolean => composedAgents.has(agent);
+export const cacheRefreshesOf = (agent: Agent): readonly CacheRefreshRecord[] =>
+  agentCacheRefreshes.get(agent) ?? [];
 
 /** Experimental engine entry; requires the reviewed native preparation/admission patch. */
 export async function createComposedRun(ctx: Context, options: ComposedRunOptions) {
@@ -90,12 +106,22 @@ export async function createComposedRun(ctx: Context, options: ComposedRunOption
   let finalizedSeq = -1;
   let finalization: Promise<void> = Promise.resolve();
   let disposed = false;
+  let activeConnectors: readonly ContextConnector[] = options.connectors;
+  const cacheRefreshes: CacheRefreshRecord[] = [];
   const sourceDeliveries = new Set<AbortController>();
   const acceptedInputs = new Map<string, UserMessage>();
 
   const setup = async (scope: Context, agent: Agent) => {
         if (composedAgents.has(agent)) throw new Error('Agent already has a context composition');
         composedAgents.add(agent);
+        agentCacheRefreshes.set(agent, cacheRefreshes);
+        let committedBaseline:
+          | {
+              entries: Map<string, { owner: string; serialized: string }>;
+              system: string;
+              toolsKey: string;
+            }
+          | undefined;
         const projections = composition.snapshot.filter(item => item.value.kind === 'projection');
         if (projections.length > 1) throw new Error('Multiple execution projections selected for one run');
         const dependencies = ['tools', 'systemPrompt', ...projections.flatMap(item => item.value.kind === 'projection' ? [item.value.service] : [])];
@@ -146,7 +172,7 @@ export async function createComposedRun(ctx: Context, options: ComposedRunOption
           const definition = (item: OwnedCurrent): ToolDefinition => {
             if (item.value.kind !== 'capability') throw new Error('Expected a capability');
             const value = item.value;
-            const native = nativeDefinition(options.connectors, item.owner, item.key);
+            const native = nativeDefinition(activeConnectors, item.owner, item.key);
             assertSupportedJsonSchema(value.output);
             if (!native) assertSupportedJsonSchema(value.parameters as JsonSchemaNode);
             const content = new Map<symbol, readonly ContentBlock[]>();
@@ -190,7 +216,7 @@ export async function createComposedRun(ctx: Context, options: ComposedRunOption
               if (item.value.kind !== 'capability') continue;
               const name = item.value.name || capabilityName(item.owner, item.key);
               if (desired.has(name)) throw new Error(`Conflicting capability name: ${name}`);
-              desired.set(name, { serialized: JSON.stringify(item.value), definition: definition(item), native: nativeDefinition(options.connectors, item.owner, item.key) });
+              desired.set(name, { serialized: JSON.stringify(item.value), definition: definition(item), native: nativeDefinition(activeConnectors, item.owner, item.key) });
             }
             for (const [name, entry] of installed) if (desired.get(name)?.serialized !== entry.value || desired.get(name)?.native !== entry.native) { entry.remove(); installed.delete(name); }
             for (const [name, entry] of desired) if (!installed.has(name)) installed.set(name, { value: entry.serialized, native: entry.native, remove: inner.tools.register(entry.definition, { when: nativeActivation(entry.native) }) });
@@ -252,6 +278,40 @@ export async function createComposedRun(ctx: Context, options: ComposedRunOption
               }
             }
             if (!admission) throw new Error('Missing compiled context admission');
+            const currentEntries = new Map<string, { owner: string; serialized: string }>();
+            for (const item of composition.snapshot) {
+              currentEntries.set(`${item.owner}\0${item.key}`, {
+                owner: item.owner,
+                serialized: JSON.stringify(item.value),
+              });
+            }
+            const currentToolsKey = JSON.stringify(admission.tools);
+            if (!committedBaseline) {
+              committedBaseline = { entries: currentEntries, system, toolsKey: currentToolsKey };
+            } else {
+              const reasons: CacheRefreshReason[] = [];
+              if (system !== committedBaseline.system) reasons.push('system-instruction');
+              if (messageReplacements.length > 0) reasons.push('context-replacement');
+              if (currentToolsKey !== committedBaseline.toolsKey) reasons.push('capability-schema');
+              if (reasons.length > 0) {
+                const owners = new Set<string>();
+                for (const [k, cur] of currentEntries) {
+                  if (committedBaseline.entries.get(k)?.serialized !== cur.serialized) owners.add(cur.owner);
+                }
+                for (const [k, prev] of committedBaseline.entries) {
+                  if (!currentEntries.has(k)) owners.add(prev.owner);
+                }
+                cacheRefreshes.push(
+                  Object.freeze({
+                    turn: event.turn,
+                    step: event.step,
+                    owners: [...owners],
+                    reasons,
+                  }),
+                );
+                committedBaseline = { entries: currentEntries, system, toolsKey: currentToolsKey };
+              }
+            }
             admission.messages = structuredClone(messages); admission.developerMessages = structuredClone(developerMessages);
             admission.messageReplacements = structuredClone(messageReplacements);
             deepFreeze(admission);
@@ -347,6 +407,22 @@ export async function createComposedRun(ctx: Context, options: ComposedRunOption
   let disposal: Promise<void> | undefined;
   return {
     agent,
+    get cacheRefreshes(): readonly CacheRefreshRecord[] {
+      return [...cacheRefreshes];
+    },
+    /** Reconfigure active connectors in-place on an idle or queued run (explicitly refreshes prefix on next step). */
+    reconfigure(nextConnectors: readonly ContextConnector[], signal?: AbortSignal): Promise<{ changedOwners: string[] }> {
+      if (disposed) return Promise.reject(new Error('Run is disposed'));
+      const combined = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
+      const operation = sourceQueue.then(async () => {
+        if (disposed) throw new Error('Run is disposed');
+        const result = await composition.replaceConnectors(nextConnectors, combined);
+        activeConnectors = nextConnectors;
+        return result;
+      });
+      sourceQueue = operation.then(() => {}, () => {});
+      return operation;
+    },
     /** Always acknowledges admission. Await receipt.completed for execution and persistence. */
     send(type: string, data: unknown, owner?: string): Promise<SendReceipt> {
       if (/^(agent|tools|session|run)\//.test(type)) return Promise.reject(new Error('External sources cannot impersonate runtime events'));

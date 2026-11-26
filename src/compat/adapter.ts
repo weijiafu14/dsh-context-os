@@ -1,5 +1,6 @@
 /** Compatibility for old provider.prepare(). The framework only sees complete handlers. */
 import { SessionId } from '@deepseek-ai/dsh-session';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { renderPrompt, renderContextSections } from '@deepseek-ai/dsh-system-prompt';
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
@@ -11,9 +12,19 @@ import { releaseContribution } from './registry.ts';
 import { nativeResource, resourceOwnership } from './nativeResource.ts';
 import { copyNativeBindings } from '../nativeBindings.ts';
 
+interface AgentCompatibilitySnapshot {
+  id: string;
+  assembly: Promise<PromptAssembly>;
+  originals: Map<string, string>;
+  baselineSystem: Map<string, string>;
+  baselineUser: Map<string, string>;
+  latestUser: Map<string, string>;
+  appendSeq: number;
+}
+
 interface CompatibilityState {
   descriptors: WeakMap<ContextConnector, { resolve(): Promise<ConnectorContribution>; source?: ConnectorContribution }>;
-  captured: WeakMap<Agent, { id: string; assembly: Promise<PromptAssembly>; originals: Map<string, string> }>;
+  captured: WeakMap<Agent, AgentCompatibilitySnapshot>;
 }
 const key = Symbol.for('dsh.context-compatibility.v1');
 const globals = globalThis as typeof globalThis & { [key]?: CompatibilityState };
@@ -21,21 +32,78 @@ const { descriptors, captured } = globals[key] ??= { descriptors: new WeakMap(),
 export function copiedNativeContext(agent: Agent): ReadonlyMap<string, string> { return captured.get(agent)?.originals ?? new Map(); }
 export function legacySource(connector: ContextConnector) { return descriptors.get(connector)?.source; }
 
-async function describe(ctx: Context, agent: Agent, event: ConnectorEvent, owns: (name: string) => boolean): Promise<Contribution[]> {
+async function describe(ctx: Context, probeScope: Context, agent: Agent, event: ConnectorEvent, owns: (name: string) => boolean): Promise<Contribution[]> {
   let state = captured.get(agent);
-  if (state?.id !== event.id) {
-    state = { id: event.id, assembly: ctx.systemPrompt.assemble({ scope: agent, agent, signal: event.signal,
-      modelSelection: agent.model.current(), contextCompositionProbe: true }), originals: new Map() };
+  if (!state) {
+    state = {
+      id: event.id,
+      assembly: ctx.systemPrompt.assemble({
+        scope: probeScope,
+        agent,
+        signal: event.signal,
+        modelSelection: agent.model.current(),
+        contextCompositionProbe: true,
+      }),
+      originals: new Map(),
+      baselineSystem: new Map(),
+      baselineUser: new Map(),
+      latestUser: new Map(),
+      appendSeq: 0,
+    };
     captured.set(agent, state);
+  } else if (state.id !== event.id) {
+    state.id = event.id;
+    state.assembly = ctx.systemPrompt.assemble({
+      scope: probeScope,
+      agent,
+      signal: event.signal,
+      modelSelection: agent.model.current(),
+      contextCompositionProbe: true,
+    });
   }
-  const assembly = await state.assembly; const changes: Contribution[] = [];
+  const assembly = await state.assembly;
+  const hasHistory = agent.session.deriveMessages().some(m => m.role === 'assistant');
+  const changes: Contribution[] = [];
+
   for (const section of assembly.sections) if (owns(section.name)) {
     state.originals.set(`system/${section.name}`, section.text);
-    changes.push({ op: 'put', key: `system/${section.name}`, value: { kind: 'instruction', role: 'system', text: renderPrompt({ ...assembly, sections: [section] }) } });
+    const rendered = renderPrompt({ ...assembly, sections: [section] });
+    // Keep deployment persona headers stable across mid-session model switches to preserve KV cache prefix
+    if (section.name.startsWith('deployment:persona-')) {
+      if (!state.baselineSystem.has(section.name)) state.baselineSystem.set(section.name, rendered);
+      changes.push({ op: 'put', key: `system/${section.name}`, value: { kind: 'instruction', role: 'system', text: state.baselineSystem.get(section.name)! } });
+    } else {
+      changes.push({ op: 'put', key: `system/${section.name}`, value: { kind: 'instruction', role: 'system', text: rendered } });
+    }
   }
+
   for (const section of renderContextSections(assembly)) if (owns(section.name)) {
     state.originals.set(`user/${section.name}`, assembly.contexts.find(item => item.name === section.name)!.text);
-    changes.push({ op: 'put', key: `user/${section.name}`, value: { kind: 'instruction', role: 'user', text: section.text } });
+    if (!hasHistory && !state.baselineUser.has(section.name)) {
+      state.baselineUser.set(section.name, section.text);
+      state.latestUser.set(section.name, section.text);
+      changes.push({ op: 'put', key: `user/${section.name}`, value: { kind: 'instruction', role: 'user', text: section.text } });
+    } else {
+      const pinned = state.baselineUser.get(section.name);
+      if (pinned !== undefined) {
+        changes.push({ op: 'put', key: `user/${section.name}`, value: { kind: 'instruction', role: 'user', text: pinned } });
+      }
+      if (state.latestUser.get(section.name) !== section.text) {
+        state.latestUser.set(section.name, section.text);
+        changes.push({
+          op: 'append',
+          key: `runtime-update:${section.name}:${++state.appendSeq}`,
+          value: {
+            messages: [
+              createUserMessage({
+                source: { kind: 'context-composition', slot: 'ambient', form: 'snapshot' },
+                content: [{ type: 'text', text: section.text }],
+              }),
+            ],
+          },
+        });
+      }
+    }
   }
   return changes;
 }
@@ -71,7 +139,7 @@ export function adaptLegacyProvider(ctx: Context, provider: LegacyProvider): Con
           const source = await descriptor.resolve();
           adapterScope.effect(() => () => releaseContribution(source), 'context-compatibility-resource');
           inner = nativeResource({ ctx: adapterScope, cwd: context.cwd, restoring: Boolean((event.data as { restoring?: boolean }).restoring), agent: () => agent,
-            describe: (event, owns) => agent ? describe(adapterScope!, agent, event, owns) : Promise.resolve([]),
+            describe: (event, owns) => agent ? describe(adapterScope!, adapterScope!, agent, event, owns) : Promise.resolve([]),
           }, { id: binding.id, contribution: source, ...resourceOwnership(source) });
         }
         agent = adapterScope!.agents.get(SessionId(event.runId));

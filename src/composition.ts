@@ -78,18 +78,101 @@ export class Composition {
   private initializationStarted = false;
   private replayOwner?: string;
   private closed = false;
-  readonly connectors: readonly ContextConnector[];
+  private _connectors: readonly ContextConnector[];
+  private readonly rawOriginals = new Map<string, ContextConnector>();
   private readonly validateCurrent: (value: CurrentContribution) => void;
   readonly runId: string;
 
   constructor(connectors: readonly ContextConnector[], validateCurrent: (value: CurrentContribution) => void = () => {}, runId: string = randomUUID()) {
     const ids = connectors.map(connector => connector.id);
     if (ids.some(id => !id) || new Set(ids).size !== ids.length) throw new Error('Connector instances must have distinct identities');
-    this.connectors = Object.freeze(connectors.map(connector => Object.freeze({
+    for (const connector of connectors) this.rawOriginals.set(connector.id, connector);
+    this._connectors = Object.freeze(connectors.map(connector => Object.freeze({
       id: connector.id, events: connector.events ? Object.freeze([...connector.events]) : undefined, handle: connector.handle.bind(connector),
     })));
     this.validateCurrent = validateCurrent;
     this.runId = runId;
+  }
+
+  get connectors(): readonly ContextConnector[] {
+    return this._connectors;
+  }
+
+  async replaceConnectors(nextConnectors: readonly ContextConnector[], signal: AbortSignal): Promise<{ changedOwners: string[] }> {
+    const operation = this.queue.then(async () => {
+      if (this.closed) throw new Error('Composition is closed');
+      signal.throwIfAborted();
+      const ids = nextConnectors.map(c => c.id);
+      if (ids.some(id => !id) || new Set(ids).size !== ids.length) throw new Error('Connector instances must have distinct identities');
+      const nextIdSet = new Set(ids);
+      const prevById = new Map(this._connectors.map(c => [c.id, c]));
+      const removedWrappers: ContextConnector[] = [];
+      const changedOwners = new Set<string>();
+
+      for (const [id, prev] of prevById) {
+        const nextRaw = nextConnectors.find(c => c.id === id);
+        if (!nextRaw || this.rawOriginals.get(id) !== nextRaw) {
+          removedWrappers.push(prev);
+          changedOwners.add(id);
+        }
+      }
+
+      const revision = ++this.revision;
+      for (const [identity, item] of [...this.current.entries()]) {
+        if (!nextIdSet.has(item.owner) || changedOwners.has(item.owner)) {
+          if (item.value.kind === 'projection' && !nextIdSet.has(item.owner)) {
+            throw new Error('Execution projection is fixed for this composition');
+          }
+          if (item.value.kind !== 'projection') {
+            this.current.delete(identity);
+            this.currentRevisions.set(identity, revision);
+          }
+        }
+      }
+
+      const nextWrapped: ContextConnector[] = [];
+      const newlyAddedIds: string[] = [];
+      for (const raw of nextConnectors) {
+        if (!changedOwners.has(raw.id) && prevById.has(raw.id)) {
+          nextWrapped.push(prevById.get(raw.id)!);
+        } else {
+          changedOwners.add(raw.id);
+          newlyAddedIds.push(raw.id);
+          this.rawOriginals.set(raw.id, raw);
+          nextWrapped.push(Object.freeze({
+            id: raw.id,
+            events: raw.events ? Object.freeze([...raw.events]) : undefined,
+            handle: raw.handle.bind(raw),
+          }));
+        }
+      }
+      for (const id of [...this.rawOriginals.keys()]) {
+        if (!nextIdSet.has(id)) this.rawOriginals.delete(id);
+      }
+      this._connectors = Object.freeze(nextWrapped);
+
+      for (const id of newlyAddedIds) {
+        await this.deliver('run/initialize', { restoring: true }, signal, id);
+      }
+      for (const removed of removedWrappers) {
+        try {
+          if (!removed.events || removed.events.includes('run/settled')) {
+            await removed.handle(Object.freeze({
+              id: randomUUID(),
+              runId: this.runId,
+              type: 'run/settled',
+              data: deepFreeze({ events: [], closing: true, outcome: { kind: 'disposed' } }),
+              signal,
+            }) as ConnectorEvent);
+          }
+        } catch {
+          /* Best-effort disposal of superseded connector */
+        }
+      }
+      return { changedOwners: [...changedOwners] };
+    });
+    this.queue = operation.then(() => {}, () => {});
+    return operation;
   }
 
   get snapshot(): readonly OwnedCurrent[] {

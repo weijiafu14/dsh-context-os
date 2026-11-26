@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-os",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DSH Context OS: compose agent runs from complete context services through events and context contributions",
   "license": "MIT",
   "engines": {
@@ -69,16 +69,16 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/schemastery": "*",
-    "@deepseek-ai/dsh-agent": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-agent-instructions": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-session": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-tool-executor-ptc": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-scope": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-util-values": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-skill": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-agent": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-agent-instructions": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-session": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-tool-executor-ptc": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-scope": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-util-values": ">=0.2.1-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-skill": ">=0.2.1-rc.3 <0.3.0",
     "react": "^18.2.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {
@@ -118,6 +118,13 @@
     "@deepseek-ai/dsh-skill": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/react": "^18.3.18",
+    "esbuild": "^0.25.0",
+    "react": "^18.3.1",
+    "typescript": "^5.8.0"
   },
   "keywords": [
     "deepseek-harness",

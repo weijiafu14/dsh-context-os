@@ -24,6 +24,31 @@ export function apply(ctx: Context): void {
     const result = await call<{ sessionId: string }>({ action: 'start', selection, prompt, requestId, workspaceId });
     ctx.uiWorkspace.openSession(result.sessionId as SessionId);
   };
-  ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: panel, inject: () => ({ loadCatalog, onRun }) }, ConnectorComposer));
-  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: panel, order: 5, label: '上下文组合' }, () => <span aria-label="上下文组合">▦</span>));
+  const onReconfigure = async (
+    targetSessionId: string,
+    selection: RunSelection,
+    mode: 'fork' | 'in-place',
+    prompt: string,
+    requestId: string,
+    workspaceId?: string,
+  ) => {
+    const result = await call<{ sessionId: string }>({
+      action: 'reconfigure',
+      targetSessionId,
+      selection,
+      mode,
+      prompt,
+      requestId,
+      workspaceId,
+    });
+    ctx.uiWorkspace.openSession(result.sessionId as SessionId);
+  };
+  ctx.slots.inject('main', () =>
+    ctx.slots.register({ name: 'main', key: panel, inject: () => ({ loadCatalog, onRun, onReconfigure }) }, ConnectorComposer),
+  );
+  ctx.slots.inject('sidebar.panellist', () =>
+    ctx.slots.register({ name: 'sidebar.panellist', id: panel, order: 5, label: '上下文组合' }, () => (
+      <span aria-label="上下文组合">▦</span>
+    )),
+  );
 }

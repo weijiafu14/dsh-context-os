@@ -4,7 +4,6 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { PreparedComposition } from '../registry.ts';
 import type { PreparedComposition as LegacyPrepared } from './registry.ts';
-import type { ContextConnector } from '../composition.ts';
 import { baseTools, subagentSupport } from './defaultConnectors.ts';
 import { ownNativeResource } from './nativeResource.ts';
 import { adaptLegacyProvider, copiedNativeContext, legacySource } from './adapter.ts';
@@ -54,7 +53,7 @@ export async function standardSelection(ctx: Context, prepared: PreparedComposit
         }));
         return { ...decision, messages: decision.messages.filter(message => {
           const source = message.source as { kind: string; name?: string };
-          return source.kind !== 'agent-instructions' && source.kind !== 'skill-catalog'
+          return source.kind !== 'agent-instructions' && source.kind !== 'skill-catalog' && source.kind !== 'time-context'
             && (source.kind !== 'skill-invocation' || selectedSkills.has(source.name ?? ''));
         }) };
       });

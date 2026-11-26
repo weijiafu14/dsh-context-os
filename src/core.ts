@@ -1,6 +1,8 @@
 /** Portable connector selection contract; contains no host credentials or business adapters. */
 /** Optional presentation grouping supplied by the host; never a runtime category. */
 export type ConnectorKind = string;
+export type CacheAffinity = 'append' | 'static';
+
 export interface ConnectorField {
   key: string;
   label: string;
@@ -12,6 +14,7 @@ export interface ConnectorCard {
   label: string;
   description: string;
   kind: ConnectorKind;
+  cacheAffinity?: CacheAffinity;
   fields?: ConnectorField[];
   disabledReason?: string;
 }
@@ -23,11 +26,28 @@ export interface RunSelection {
   version: 1;
   bindings: ConnectorBinding[];
 }
+export type CacheRefreshReason = 'system-instruction' | 'context-replacement' | 'capability-schema';
+export interface CacheRefreshRecord {
+  turn: number;
+  step: number;
+  owners: string[];
+  reasons: CacheRefreshReason[];
+}
+export interface ActiveComposedSessionInfo {
+  sessionId: string;
+  title: string;
+  turnCount: number;
+  busy?: boolean;
+  selection?: RunSelection;
+  lastCacheRefresh?: CacheRefreshRecord;
+}
 export interface ComposerCatalog {
   cards: ConnectorCard[];
   description?: string;
   workspaces?: Array<{ id: string; label: string }>;
   workspaceId?: string;
+  protocol?: 'events' | 'legacy';
+  sessions?: ActiveComposedSessionInfo[];
 }
 
 /** Parse a browser-authored selection without admitting executable code or arbitrary object fields. */
